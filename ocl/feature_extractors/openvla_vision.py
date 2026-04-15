@@ -159,12 +159,7 @@ class OpenVLADinoSigLIPFeatureExtractor(nn.Module):
         dino_feats = self.dino_featurizer.forward_features(dual_inputs["dino"])
         siglip_feats = self.siglip_featurizer.forward_features(dual_inputs["siglip"])
 
-        if dino_feats.shape[1] != siglip_feats.shape[1]:
-            # CLS + register tokens 제거
-            dino_feats = dino_feats[:, -siglip_feats.shape[1]:, :]
-
-        feats = torch.cat([dino_feats, siglip_feats], dim=2)
-
+        # 혹시라도 반환 형식이 list/tuple이면 마지막 항목 사용
         if isinstance(dino_feats, (list, tuple)):
             dino_feats = dino_feats[-1]
         if isinstance(siglip_feats, (list, tuple)):
@@ -172,6 +167,11 @@ class OpenVLADinoSigLIPFeatureExtractor(nn.Module):
 
         if dino_feats.ndim != 3 or siglip_feats.ndim != 3:
             raise ValueError(f"Unexpected feature shape: {dino_feats.shape}, {siglip_feats.shape}")
+
+        # token 수 맞추기: DINO의 CLS/register 제거 포함
+        min_tokens = min(dino_feats.shape[1], siglip_feats.shape[1])
+        dino_feats = dino_feats[:, -min_tokens:, :]
+        siglip_feats = siglip_feats[:, -min_tokens:, :]
 
         feats = torch.cat([dino_feats, siglip_feats], dim=2)
         feats = self.proj(feats)
