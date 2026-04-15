@@ -1,0 +1,273 @@
+# @package _global_
+defaults:
+  - /experiment/projects/prompting/_base_prompting_dinosaur
+  - /dataset: vg_coco
+  - /experiment/projects/prompting/vg/_preprocessing_vg
+  - /experiment/projects/prompting/vg/_metrics_vg
+  - _self_
+
+experiment:
+  image_size: 224
+  mask_size: ${.image_size}
+  batch_size_per_gpu: 64
+  base_learning_rate: 0.0004
+  max_num_binds: 7
+
+  slot_dim: 256
+  num_slots: 7
+
+  # base config의 자동 유도값은 TimmFeatureExtractor 기준이라
+  # OpenVLA custom extractor에서는 직접 고정해주는 것이 안전함
+  timm_model: vit_so400m_patch14_siglip_224
+  feature_dim: 256
+  num_patches: 256
+  num_patches_per_side: 16
+  patch_size: 14
+
+  total_batch_size: "${mul: ${trainer.devices}, ${.batch_size_per_gpu}}"
+  total_lr: "${eval: 'a * (b / 64)**0.5', ${.base_learning_rate}, ${.total_batch_size}}"
+  mapping_lr: "${mul: 0.1, ${.total_lr}}"
+
+trainer:
+  devices: 1
+  max_steps: 500000
+  gradient_clip_val: 1.0
+  logger:
+    _target_: pytorch_lightning.loggers.WandbLogger
+    project: ctrl_o_openvla
+    name: openvla_siglip_exp
+    save_dir: ./wandb
+
+models:
+  feature_extractor:
+    _target_: ocl.feature_extractors.openvla_vision.OpenVLASigLIPFeatureExtractor
+    model_name: vit_so400m_patch14_siglip_224
+    img_size: 224
+    pretrained: true
+    freeze: true
+    dynamic_img_size: false
+
+  mapping:
+    _target_: routed.ocl.mapping.MLPMapping
+    dim: ${experiment.feature_dim}
+    x_path: feature_extractor
+
+  conditioning:
+    _target_: routed.ocl.conditioning.LangConditioning
+    n_slots: ${experiment.num_slots}
+    lang_dim: 4096
+    object_dim: ${experiment.slot_dim}
+    dual_conditioning: false
+    name_embedding_path: input.name_embedding
+    batch_size_path: input.batch_size
+    mask_path: input.contrastive_loss_mask
+
+  perceptual_grouping:
+    _target_: routed.ocl.perceptual_grouping.SlotAttentionGrouping
+    feature_dim: ${experiment.slot_dim}
+    object_dim: ${experiment.slot_dim}
+    use_projection_bias: false
+    positional_embedding:
+      _target_: ocl.neural_networks.wrappers.Sequential
+      _args_:
+        - _target_: ocl.neural_networks.positional_embedding.DummyPositionEmbed
+        - _target_: ocl.neural_networks.build_two_layer_mlp
+          input_dim: ${experiment.feature_dim}
+          output_dim: ${experiment.feature_dim}
+          hidden_dim: "${mul: ${experiment.feature_dim}, 2}"
+          initial_layer_norm: true
+    ff_mlp:
+      _target_: ocl.neural_networks.build_two_layer_mlp
+      input_dim: ${experiment.slot_dim}
+      output_dim: ${experiment.slot_dim}
+      hidden_dim: "${mul: ${experiment.slot_dim}, 4}"
+      initial_layer_norm: true
+      residual: true
+    feature_path: mapping
+    conditioning_path: conditioning
+
+  attn_aggregation:
+    _target_: routed.ocl.heads.AttentionAggregationHead
+    dim: ${experiment.feature_dim}
+    attn_path: perceptual_grouping.feature_attributions
+    x_path: mapping.features
+
+  projector_slots:
+    _target_: routed.ocl.heads.SlotProjectorHead
+    dim: ${experiment.feature_dim}
+    embedding_dim: 4096
+    slots_path: attn_aggregation
+
+  lang_embedding:
+    _target_: routed.ocl.heads.LangEmbeddingHead
+    embedding_dim: 4096
+    lang_dim: 4096
+    name_embedding_path: input.name_embedding
+
+  point_embedding:
+    _target_: routed.ocl.heads.PointEmbeddingHead
+    embedding_dim: 4096
+    point_embedding_path: input.bbox_centroids
+
+  dec_conditioning:
+    _target_: routed.ocl.decoder_conditioning.EncodeLangConditioning
+    dim: ${experiment.slot_dim}
+    lang_dim: 4096
+    language_path: input.name_embedding
+    mask_path: input.contrastive_loss_mask
+
+  object_decoder:
+    _target_: routed.ocl.decoding.PatchDecoder
+    decoder:
+      _target_: ocl.neural_networks.build_mlp
+      _partial_: true
+      features: [2048, 2048, 2048]
+    object_dim: ${experiment.slot_dim}
+    output_dim: ${experiment.feature_dim}
+    num_patches: ${experiment.num_patches}
+    object_features_path: perceptual_grouping.objects
+    image_path: input.image
+    conditioned: true
+    condition_info_path: dec_conditioning
+
+optimizers:
+  opt0:
+    _target_: ocl.optimization.OptimizationWrapper
+    optimizer:
+      _target_: torch.optim.AdamW
+      _partial_: true
+    parameter_groups:
+      _target_: ocl.optimization.ParameterGroupCreator
+      param_groups:
+        grouping:
+          params:
+            [
+              models.perceptual_grouping,
+              models.conditioning,
+              models.object_decoder,
+              models.dec_conditioning,
+            ]
+          lr: ${experiment.total_lr}
+          weight_decay: 0.0
+        encoder:
+          params:
+            [
+              models.mapping,
+              models.lang_embedding,
+              models.point_embedding,
+              models.attn_aggregation,
+              models.projector_slots,
+              models.feature_extractor.proj,
+            ]
+          lr: ${experiment.mapping_lr}
+          weight_decay: 0.0
+
+losses:
+  mse:
+    _target_: routed.ocl.losses.ReconstructionLoss
+    loss_type: mse
+    input_path: object_decoder.reconstruction
+    target_path: feature_extractor.features
+
+  contrastive_loss_lang:
+    _target_: routed.ocl.losses.DiagonalContrastiveLoss
+    x1_path: projector_slots
+    x2_path: lang_embedding
+    contrastive_loss_mask_path: input.contrastive_loss_mask
+    temp: 0.1
+    batch_contrastive: true
+    weight: 0.2
+
+  contrastive_loss_point:
+    _target_: routed.ocl.losses.DiagonalContrastiveLoss
+    x1_path: projector_slots
+    x2_path: point_embedding
+    contrastive_loss_mask_path: input.contrastive_loss_mask
+    temp: 0.1
+    batch_contrastive: true
+    weight: 0.2
+
+visualizations:
+  input:
+    _target_: routed.ocl.visualizations.Image
+    n_instances: 32
+    denormalization:
+      _target_: ocl.preprocessing.Denormalize
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+    image_path: input.image
+
+  masks:
+    _target_: routed.ocl.visualizations.Mask
+    mask_path: object_decoder.masks_as_image
+
+  pred_segmentation:
+    _target_: routed.ocl.visualizations.Segmentation
+    denormalization:
+      _target_: ocl.preprocessing.Denormalize
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+    image_path: input.image
+    mask_path: object_decoder.masks_as_image
+
+  pred_segmentation_with_text:
+    _target_: routed.ocl.visualizations.SegmentationWithText
+    n_instances: 32
+    denormalization:
+      _target_: ocl.preprocessing.Denormalize
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+    image_path: input.image
+    mask_path: object_decoder.masks_as_image
+    gt_masks_path: input.instance_mask_v2
+    selected_indices_path: input.selected_indices
+    text_path: input.name
+    bbox_centroids_path: input.all_bbox_centroids
+
+evaluation_metrics:
+  acc_sc:
+    _target_: routed.ocl.metrics.acc.EmbAccMetric
+    mode: sc
+    slot_emb_path: projector_slots
+    ctrl_emb_path: lang_embedding
+    mask_idx_path: input.contrastive_loss_mask
+
+  acc_cs:
+    _target_: routed.ocl.metrics.acc.EmbAccMetric
+    mode: cs
+    slot_emb_path: projector_slots
+    ctrl_emb_path: lang_embedding
+    mask_idx_path: input.contrastive_loss_mask
+
+  acc_avg:
+    _target_: routed.ocl.metrics.acc.EmbAccMetric
+    mode: average
+    slot_emb_path: projector_slots
+    ctrl_emb_path: lang_embedding
+    mask_idx_path: input.contrastive_loss_mask
+
+training_metrics:
+  acc_sc:
+    _target_: routed.ocl.metrics.acc.EmbAccMetric
+    mode: sc
+    slot_emb_path: projector_slots
+    ctrl_emb_path: lang_embedding
+    mask_idx_path: input.contrastive_loss_mask
+
+  acc_cs:
+    _target_: routed.ocl.metrics.acc.EmbAccMetric
+    mode: cs
+    slot_emb_path: projector_slots
+    ctrl_emb_path: lang_embedding
+    mask_idx_path: input.contrastive_loss_mask
+
+  acc_avg:
+    _target_: routed.ocl.metrics.acc.EmbAccMetric
+    mode: average
+    slot_emb_path: projector_slots
+    ctrl_emb_path: lang_embedding
+    mask_idx_path: input.contrastive_loss_mask
+
+dataset:
+  num_workers: 4
+  batch_size: ${experiment.batch_size_per_gpu}

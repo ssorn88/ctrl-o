@@ -218,8 +218,7 @@ def train(config: TrainingConfig):
     if vla_transform is not None:
         datamodule_kwargs["transform_from_model"] = vla_transform
 
-
-    datamodule = build_and_register_datamodule_from_config(config)
+    datamodule = build_and_register_datamodule_from_config(config, **datamodule_kwargs)
 
     callbacks = hydra_zen.instantiate(config.trainer.callbacks, _convert_="all")
     callbacks = callbacks if callbacks else []
