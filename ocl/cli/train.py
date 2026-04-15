@@ -181,9 +181,11 @@ def train(config: TrainingConfig):
 
     model = build_model_from_config(config)
     print("===== DEBUG FEATURE EXTRACTOR =====")
-    print(type(model.models.feature_extractor.backbone))
-    print(model.models.feature_extractor.backbone.embed_dim)
-
+    print(type(model.models.feature_extractor))
+    print(type(model.models.feature_extractor.dino_featurizer))
+    print(type(model.models.feature_extractor.siglip_featurizer))
+    print(model.models.feature_extractor.in_dim)
+    print(model.models.feature_extractor.out_dim)
     print("===================================")
     # [새로 추가할 부분] 로드된 모델 컴포넌트들을 터미널에 출력해서 확인
     # =====================================================================

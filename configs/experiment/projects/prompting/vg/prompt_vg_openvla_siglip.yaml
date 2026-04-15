@@ -40,10 +40,10 @@ trainer:
 
 models:
   feature_extractor:
-    _target_: ocl.feature_extractors.openvla_dinosiglip_local.OpenVLADinoSigLIPFeatureExtractor
+    _target_: ocl.feature_extractors.openvla_vision.OpenVLADinoSigLIPFeatureExtractor
     vision_backbone_id: dinosiglip-vit-so-224px
-    image_resize_strategy: resize-naive
     default_image_size: 224
+    image_resize_strategy: resize-naive
     freeze: true
     out_dim: 256
 
