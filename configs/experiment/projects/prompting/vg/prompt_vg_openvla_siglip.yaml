@@ -40,12 +40,12 @@ trainer:
 
 models:
   feature_extractor:
-    _target_: ocl.feature_extractors.openvla_vision.OpenVLASigLIPFeatureExtractor
-    model_name: vit_so400m_patch14_siglip_224
-    img_size: 224
-    pretrained: true
+    _target_: ocl.feature_extractors.openvla_dinosiglip_local.OpenVLADinoSigLIPFeatureExtractor
+    vision_backbone_id: dinosiglip-vit-so-224px
+    image_resize_strategy: resize-naive
+    default_image_size: 224
     freeze: true
-    dynamic_img_size: false
+    out_dim: 256
 
   mapping:
     _target_: routed.ocl.mapping.MLPMapping
