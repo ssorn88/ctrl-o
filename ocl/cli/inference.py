@@ -28,11 +28,14 @@ logging.getLogger().setLevel(logging.INFO)
 
 
 # TODO: Use CVPR submission checkpoints --- these checkpoints are recent I suppose
+# CHECKPOINTS = {
+#     "checkpoint": "pretrained_models/ctrlo/pretrained_model.ckpt",
+#     "config": "pretrained_models/ctrlo/config.yaml",
+# }
 CHECKPOINTS = {
-    "checkpoint": "pretrained_models/ctrlo/pretrained_model.ckpt",
-    "config": "pretrained_models/ctrlo/config.yaml",
+    "checkpoint": "/media/aivs-7/새 볼륨/es/CTRL-O/outputs/2026-04-15/23-19-57/checkpoints/last.ckpt",
+    "config": "/media/aivs-7/새 볼륨/es/CTRL-O/configs/experiment/projects/prompting/vg/prompt_vg_openvla_siglip.yaml",
 }
-
 
 l2v = LLM2Vec.from_pretrained(
     "McGill-NLP/LLM2Vec-Meta-Llama-3-8B-Instruct-mntp",
