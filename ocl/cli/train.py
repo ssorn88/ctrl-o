@@ -63,7 +63,7 @@ class TrainingConfig:
     """
 
     dataset: Any
-    models: Any  # When provided with dict wrap in `utils.Combined`, otherwise interpret as model.
+    models: Any
     optimizers: Dict[str, Any]
     losses: Dict[str, Any]
     visualizations: Dict[str, Any] = dataclasses.field(default_factory=dict)
@@ -72,6 +72,7 @@ class TrainingConfig:
     training_metrics: Optional[Dict[str, Any]] = None
     evaluation_metrics: Optional[Dict[str, Any]] = None
     load_checkpoint: Optional[str] = None
+    checkpoint_path: Optional[str] = None
     load_checkpoint_partial: Optional[str] = None
     modules_to_load: Optional[Dict[str, str]] = None
     trainable_models: Optional[List[str]] = None
@@ -249,8 +250,9 @@ def train(config: TrainingConfig):
 
     trainer: pl.Trainer = hydra_zen.instantiate(config.trainer, callbacks=callbacks, _convert_="all")
 
-    if config.load_checkpoint:
-        checkpoint_path = hydra.utils.to_absolute_path(config.load_checkpoint)
+    if config.checkpoint_path:
+        checkpoint_path = hydra.utils.to_absolute_path(config.checkpoint_path)
+        print(f"Resuming training from checkpoint: {checkpoint_path}")
     else:
         checkpoint_path = None
 

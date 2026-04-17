@@ -16,8 +16,6 @@ experiment:
   slot_dim: 256
   num_slots: 7
 
-  # base config의 자동 유도값은 TimmFeatureExtractor 기준이라
-  # OpenVLA custom extractor에서는 직접 고정해주는 것이 안전함
   timm_model: vit_so400m_patch14_siglip_224
   feature_dim: 256
   num_patches: 256

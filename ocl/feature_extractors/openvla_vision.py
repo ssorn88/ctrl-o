@@ -1,5 +1,3 @@
-# ocl/feature_extractors/openvla_vision.py
-
 import math
 
 import torch
@@ -8,7 +6,6 @@ import timm
 import ocl.typing
 from PIL import Image
 from torchvision.transforms import Compose, Resize
-from torchvision.transforms.functional import to_pil_image
 
 
 class DinoSigLIPImageTransform:
@@ -36,7 +33,6 @@ class OpenVLADinoSigLIPFeatureExtractor(nn.Module):
     ):
         super().__init__()
 
-        # OpenVLA dinosiglip_vit.py의 backbone 조합을 직접 반영
         if vision_backbone_id == "dinosiglip-vit-so-224px":
             dino_name = "vit_large_patch14_reg4_dinov2.lvd142m"
             siglip_name = "vit_so400m_patch14_siglip_224"
@@ -124,26 +120,28 @@ class OpenVLADinoSigLIPFeatureExtractor(nn.Module):
         pos = torch.stack([x.reshape(-1), y.reshape(-1)], dim=-1)
         return pos.unsqueeze(0).repeat(b, 1, 1)
 
-    def _unnormalize_imagenet(self, img: torch.Tensor) -> torch.Tensor:
-        mean = torch.tensor([0.485, 0.456, 0.406], device=img.device, dtype=img.dtype).view(3, 1, 1)
-        std = torch.tensor([0.229, 0.224, 0.225], device=img.device, dtype=img.dtype).view(3, 1, 1)
-        return (img * std + mean).clamp(0, 1)
-
     def _tensor_batch_to_dual_dict(self, batch_tensor: torch.Tensor):
-        transform = self.get_transform()
-        dino_list = []
-        siglip_list = []
+        """
+        batch_tensor: [B, 3, H, W] normalized with ImageNet stats
+        -> dual input dict without PIL conversion
+        """
+        mean = torch.tensor([0.485, 0.456, 0.406], device=batch_tensor.device).view(1, 3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225], device=batch_tensor.device).view(1, 3, 1, 1)
 
-        for img in batch_tensor:
-            img_cpu = self._unnormalize_imagenet(img.detach().cpu())
-            pil_img = to_pil_image(img_cpu)
-            out = transform(pil_img)
-            dino_list.append(out["dino"])
-            siglip_list.append(out["siglip"])
+        x = batch_tensor * std + mean
+        x = x.clamp(0, 1)
+
+        dino_mean = torch.tensor([0.485, 0.456, 0.406], device=x.device).view(1, 3, 1, 1)
+        dino_std = torch.tensor([0.229, 0.224, 0.225], device=x.device).view(1, 3, 1, 1)
+        dino = (x - dino_mean) / dino_std
+
+        siglip_mean = torch.tensor([0.5, 0.5, 0.5], device=x.device).view(1, 3, 1, 1)
+        siglip_std = torch.tensor([0.5, 0.5, 0.5], device=x.device).view(1, 3, 1, 1)
+        siglip = (x - siglip_mean) / siglip_std
 
         return {
-            "dino": torch.stack(dino_list, dim=0).to(batch_tensor.device),
-            "siglip": torch.stack(siglip_list, dim=0).to(batch_tensor.device),
+            "dino": dino,
+            "siglip": siglip,
         }
 
     def forward(self, inputs):
@@ -159,7 +157,6 @@ class OpenVLADinoSigLIPFeatureExtractor(nn.Module):
         dino_feats = self.dino_featurizer.forward_features(dual_inputs["dino"])
         siglip_feats = self.siglip_featurizer.forward_features(dual_inputs["siglip"])
 
-        # 혹시라도 반환 형식이 list/tuple이면 마지막 항목 사용
         if isinstance(dino_feats, (list, tuple)):
             dino_feats = dino_feats[-1]
         if isinstance(siglip_feats, (list, tuple)):
@@ -168,7 +165,6 @@ class OpenVLADinoSigLIPFeatureExtractor(nn.Module):
         if dino_feats.ndim != 3 or siglip_feats.ndim != 3:
             raise ValueError(f"Unexpected feature shape: {dino_feats.shape}, {siglip_feats.shape}")
 
-        # token 수 맞추기: DINO의 CLS/register 제거 포함
         min_tokens = min(dino_feats.shape[1], siglip_feats.shape[1])
         dino_feats = dino_feats[:, -min_tokens:, :]
         siglip_feats = siglip_feats[:, -min_tokens:, :]
